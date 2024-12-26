@@ -1,0 +1,9 @@
+Pillow==8.4.0
+steganography==1.0.1
+pyExifTool==0.1.3
+numpy==1.23.1
+PyPDF2==1.26.0
+python-docx==0.8.11
+wave==0.0.2
+zipfile36==0.1.3
+hashlib==3.10.0

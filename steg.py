@@ -12,6 +12,7 @@ import numpy as np
 import binascii
 import wave
 import audioop
+import re
 
 
 # Function to extract printable strings from a file (similar to the "strings" command)
@@ -20,17 +21,15 @@ def extract_strings(file_path, min_length=4):
     try:
         with open(file_path, "rb") as f:
             content = f.read()
-            # Extract sequences of printable characters with a minimum length
             strings = []
             temp = ""
             for byte in content:
-                if 32 <= byte <= 126:  # Check if byte is a printable character
+                if 32 <= byte <= 126:
                     temp += chr(byte)
                 else:
                     if len(temp) >= min_length:
                         strings.append(temp)
                     temp = ""
-            # Add last string if it's valid
             if len(temp) >= min_length:
                 strings.append(temp)
 
@@ -58,6 +57,10 @@ def check_file_signature(file_path):
                 result += "[*] This is likely a PNG file.\n"
             elif magic_bytes.startswith(b"\x25\x50\x44\x46"):  # PDF magic bytes
                 result += "[*] This is likely a PDF file.\n"
+            elif magic_bytes.startswith(b"\x50\x4B\x03\x04"):  # ZIP magic bytes
+                result += "[*] This is likely a ZIP file.\n"
+            elif magic_bytes.startswith(b"\x4D\x5A"):  # EXE magic bytes
+                result += "[*] This is likely a Windows EXE file.\n"
             else:
                 result += "[*] Unknown file signature.\n"
     except Exception as e:
@@ -88,12 +91,12 @@ def binwalk_like_analysis(file_path):
     try:
         with open(file_path, "rb") as f:
             content = f.read()
-            # Look for typical embedded file signatures
             known_signatures = {
-                b"\x7f\x45\x4c\x46": "ELF",  # ELF file signature
-                b"\x50\x4b\x03\x04": "ZIP",  # ZIP file signature
-                b"\x89\x50\x4e\x47": "PNG",  # PNG file signature
-                b"\xff\xd8\xff": "JPEG",  # JPEG file signature
+                b"\x7f\x45\x4c\x46": "ELF",
+                b"\x50\x4b\x03\x04": "ZIP",
+                b"\x89\x50\x4e\x47": "PNG",
+                b"\xff\xd8\xff": "JPEG",
+                b"\x25\x50\x44\x46": "PDF"
             }
             for sig, file_type in known_signatures.items():
                 if sig in content:
@@ -174,14 +177,14 @@ def hash_file(file_path, algorithm='sha256'):
     return result
 
 
-# Function to analyze audio files (simple check for hidden data)
+# Function to analyze audio files (check for hidden data)
 def analyze_audio(file_path):
     result = ""
     try:
         with wave.open(file_path, 'rb') as audio:
             params = audio.getparams()
             result += f"Audio File Parameters: {params}\n"
-            if params.sampwidth == 2:  # Check if it's 16-bit audio, which could hide data
+            if params.sampwidth == 2:  # Check if it's 16-bit audio
                 result += "[*] Audio file could contain hidden data (16-bit audio).\n"
             else:
                 result += "[*] No obvious hidden data in audio file.\n"
@@ -190,20 +193,31 @@ def analyze_audio(file_path):
     return result
 
 
-# Function to check file entropy
-def analyze_entropy(file_path):
+# Function to search for encoded or hidden patterns (e.g., base64, hex)
+def search_encoded_patterns(file_path):
     result = ""
     try:
         with open(file_path, "rb") as f:
-            data = f.read()
-            entropy = -sum((data.count(byte) / len(data)) * np.log2(data.count(byte) / len(data)) for byte in set(data))
-        result = f"Entropy of {file_path}: {entropy}\n"
-        if entropy > 7.5:
-            result += "[*] High entropy (possible compression or encryption).\n"
-        else:
-            result += "[*] Low entropy (likely uncompressed text data).\n"
+            content = f.read()
+            # Search for base64 encoded data
+            base64_pattern = r'[A-Za-z0-9+/=]{4,}'
+            base64_matches = re.findall(base64_pattern, content.decode('latin1', errors='ignore'))
+            if base64_matches:
+                result += f"[*] Found base64 encoded data:\n"
+                result += "\n".join(base64_matches[:5])  # Show first 5 matches
+            else:
+                result += "[*] No base64 encoded data found.\n"
+
+            # Search for hexadecimal patterns (just an example)
+            hex_pattern = r'\b[0-9a-fA-F]{32}\b'  # Regex for MD5-like hashes
+            hex_matches = re.findall(hex_pattern, content.decode('latin1', errors='ignore'))
+            if hex_matches:
+                result += f"[*] Found hex patterns (possible hash or encoded data):\n"
+                result += "\n".join(hex_matches[:5])  # Show first 5 matches
+            else:
+                result += "[*] No hex patterns found.\n"
     except Exception as e:
-        result = f"[!] Error calculating entropy: {e}\n"
+        result = f"[!] Error searching for encoded patterns: {e}\n"
     return result
 
 
@@ -218,11 +232,12 @@ def run_analysis(file_path, keyword):
     result += binwalk_like_analysis(file_path)
     result += hash_file(file_path, 'sha256')
     result += analyze_entropy(file_path)
+    result += search_encoded_patterns(file_path)
 
+    # File type-specific analysis
     if file_path.lower().endswith(('png', 'jpg', 'jpeg', 'bmp', 'gif')):
         result += extract_lsb(file_path, keyword)
         result += extract_metadata(file_path, keyword)
-        result += extract_steganography(file_path, keyword)
     elif file_path.lower().endswith('.pdf'):
         result += extract_pdf_text(file_path, keyword)
     elif file_path.lower().endswith('.docx'):
@@ -247,7 +262,6 @@ def browse_file():
                                                     ("ZIP Files", "*.zip")])
     
     if filename:
-        # Ensure the entry box displays the selected filename
         file_path_entry.delete(0, tk.END)
         file_path_entry.insert(0, filename)
 
