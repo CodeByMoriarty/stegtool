@@ -1,4 +1,7 @@
 CTF Analysis Tool 🛠️🔍
+
+
+
 Welcome to the CTF Analysis Tool — a powerful utility for forensic analysis, data extraction, and file manipulation, ideal for Capture The Flag (CTF) challenges! This tool allows you to analyze various file types, extract useful data, and uncover hidden information. Whether you're dealing with hashes, embedded data, steganography, or metadata, this tool has you covered.
 
 Features ✨
