@@ -1,312 +1,409 @@
 import os
-import tkinter as tk
-from tkinter import filedialog, messagebox
-from PIL import Image
-from stegano import lsb
-import exiftool
-import PyPDF2
-import docx
-import zipfile
 import hashlib
-import numpy as np
 import binascii
-import wave
-import audioop
+import numpy as np
 import re
+from PIL import Image
+import magic
+import pikepdf
+import logging
+import mimetypes
+import base64
+from zipfile import ZipFile
+import tkinter as tk
+from tkinter import filedialog, messagebox, scrolledtext
 
+# Logging Configuration
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# Function to extract printable strings from a file (similar to the "strings" command)
-def extract_strings(file_path, min_length=4):
-    result = ""
+# Helper Function: Calculate File Hash (MD5, SHA256)
+def calculate_hash(file_path, hash_type='md5'):
+    hash_func = hashlib.md5() if hash_type == 'md5' else hashlib.sha256()
     try:
         with open(file_path, "rb") as f:
-            content = f.read()
-            strings = []
-            temp = ""
-            for byte in content:
-                if 32 <= byte <= 126:
-                    temp += chr(byte)
-                else:
-                    if len(temp) >= min_length:
-                        strings.append(temp)
-                    temp = ""
-            if len(temp) >= min_length:
-                strings.append(temp)
-
-            if strings:
-                result += "[*] Extracted strings:\n"
-                for s in strings:
-                    result += s + "\n"
-            else:
-                result += "[*] No printable strings found.\n"
-    except Exception as e:
-        result = f"[!] Error extracting strings: {e}\n"
-    return result
-
-
-# Function to analyze file signature (magic bytes)
-def check_file_signature(file_path):
-    result = ""
-    try:
-        with open(file_path, "rb") as f:
-            magic_bytes = f.read(4)
-            result += f"File signature (magic bytes): {binascii.hexlify(magic_bytes)}\n"
-            if magic_bytes.startswith(b"\xFF\xD8"):  # JPEG magic bytes
-                result += "[*] This is likely a JPEG file.\n"
-            elif magic_bytes.startswith(b"\x89\x50\x4E\x47"):  # PNG magic bytes
-                result += "[*] This is likely a PNG file.\n"
-            elif magic_bytes.startswith(b"\x25\x50\x44\x46"):  # PDF magic bytes
-                result += "[*] This is likely a PDF file.\n"
-            elif magic_bytes.startswith(b"\x50\x4B\x03\x04"):  # ZIP magic bytes
-                result += "[*] This is likely a ZIP file.\n"
-            elif magic_bytes.startswith(b"\x4D\x5A"):  # EXE magic bytes
-                result += "[*] This is likely a Windows EXE file.\n"
-            else:
-                result += "[*] Unknown file signature.\n"
-    except Exception as e:
-        result = f"[!] Error checking file signature: {e}\n"
-    return result
-
-
-# Function to analyze entropy (randomness) of the file
-def analyze_entropy(file_path):
-    result = ""
-    try:
-        with open(file_path, "rb") as f:
-            data = f.read()
-            entropy = -sum((data.count(byte) / len(data)) * np.log2(data.count(byte) / len(data)) for byte in set(data))
-        result = f"Entropy of {file_path}: {entropy}\n"
-        if entropy > 7.5:
-            result += "[*] High entropy (possible compression or encryption).\n"
-        else:
-            result += "[*] Low entropy (likely uncompressed text data).\n"
-    except Exception as e:
-        result = f"[!] Error calculating entropy: {e}\n"
-    return result
-
-
-# Function to analyze and extract hidden files in binary (binwalk-like analysis)
-def binwalk_like_analysis(file_path):
-    result = ""
-    try:
-        with open(file_path, "rb") as f:
-            content = f.read()
-            known_signatures = {
-                b"\x7f\x45\x4c\x46": "ELF",
-                b"\x50\x4b\x03\x04": "ZIP",
-                b"\x89\x50\x4e\x47": "PNG",
-                b"\xff\xd8\xff": "JPEG",
-                b"\x25\x50\x44\x46": "PDF"
-            }
-            for sig, file_type in known_signatures.items():
-                if sig in content:
-                    result += f"[*] Found embedded {file_type} file.\n"
-            if not result:
-                result = "[*] No embedded files found.\n"
-    except Exception as e:
-        result = f"[!] Error with binwalk-like analysis: {e}\n"
-    return result
-
-
-# Function to extract text from a PDF file
-def extract_pdf_text(file_path, keyword):
-    result = ""
-    try:
-        with open(file_path, "rb") as file:
-            reader = PyPDF2.PdfReader(file)
-            text = ""
-            for page in reader.pages:
-                text += page.extract_text()
-            
-            if keyword in text:
-                result += f"Found '{keyword}' in PDF text.\n"
-            else:
-                result += "[*] Keyword not found in PDF text.\n"
-    except Exception as e:
-        result = f"[!] Error reading PDF file: {e}\n"
-    return result
-
-
-# Function to extract text from a Word file (DOCX)
-def extract_word_text(file_path, keyword):
-    result = ""
-    try:
-        doc = docx.Document(file_path)
-        text = ""
-        for para in doc.paragraphs:
-            text += para.text
-        
-        if keyword in text:
-            result += f"Found '{keyword}' in Word document.\n"
-        else:
-            result += "[*] Keyword not found in Word document text.\n"
-    except Exception as e:
-        result = f"[!] Error reading Word file: {e}\n"
-    return result
-
-
-# Function to extract text from a ZIP file
-def extract_zip_text(file_path, keyword):
-    result = ""
-    try:
-        with zipfile.ZipFile(file_path, 'r') as zip_ref:
-            zip_ref.extractall('extracted_files')
-            extracted_files = os.listdir('extracted_files')
-            result += f"Extracted {len(extracted_files)} files from the ZIP archive.\n"
-            for extracted_file in extracted_files:
-                with open(os.path.join('extracted_files', extracted_file), 'r', encoding='utf-8', errors='ignore') as f:
-                    text = f.read()
-                    if keyword in text:
-                        result += f"Found '{keyword}' in extracted file: {extracted_file}\n"
-        return result
-    except Exception as e:
-        return f"[!] Error with ZIP extraction: {e}\n"
-
-
-# Function to calculate file hash (MD5, SHA256, etc.)
-def hash_file(file_path, algorithm='sha256'):
-    result = ""
-    try:
-        hash_func = hashlib.new(algorithm)
-        with open(file_path, "rb") as f:
-            while chunk := f.read(4096):
+            while chunk := f.read(8192):
                 hash_func.update(chunk)
-        result = f"{algorithm.upper()} hash of {file_path}: {hash_func.hexdigest()}\n"
+        return hash_func.hexdigest()
     except Exception as e:
-        result = f"[!] Error calculating file hash: {e}\n"
-    return result
+        logging.error(f"Error calculating hash for {file_path}: {e}")
+        return None
 
+# Helper Function: Detect File Type
+def detect_file_type(file_path):
+    file_type, _ = mimetypes.guess_type(file_path)
+    return file_type
 
-# Function to analyze audio files (check for hidden data)
-def analyze_audio(file_path):
-    result = ""
+# Helper Function: Extract Strings from Files
+def extract_strings(file_path, min_length=4):
     try:
-        with wave.open(file_path, 'rb') as audio:
-            params = audio.getparams()
-            result += f"Audio File Parameters: {params}\n"
-            if params.sampwidth == 2:  # Check if it's 16-bit audio
-                result += "[*] Audio file could contain hidden data (16-bit audio).\n"
-            else:
-                result += "[*] No obvious hidden data in audio file.\n"
+        with open(file_path, 'rb') as f:
+            data = f.read()
+        strings = re.findall(rb'[\x20-\x7e]{' + str(min_length).encode() + rb',}', data)  # Match printable characters
+        return [s.decode('utf-8', errors='ignore') for s in strings]
     except Exception as e:
-        result = f"[!] Error analyzing audio file: {e}\n"
-    return result
+        logging.error(f"Error extracting strings from {file_path}: {e}")
+        return None
 
+# Helper Function: Hex Dump (similar to xxd)
+def hex_dump(file_path):
+    try:
+        with open(file_path, 'rb') as f:
+            data = f.read()
+        hex_dump = binascii.hexlify(data).decode('utf-8')
+        return '\n'.join([hex_dump[i:i+32] for i in range(0, len(hex_dump), 32)])  # Split into lines of 32 characters
+    except Exception as e:
+        logging.error(f"Error performing hex dump on {file_path}: {e}")
+        return None
 
-# Function to search for encoded or hidden patterns (e.g., base64, hex)
-def search_encoded_patterns(file_path):
-    result = ""
+# Helper Function: Perform Entropy Analysis (Randomness check)
+def calculate_entropy(file_path):
+    try:
+        with open(file_path, 'rb') as f:
+            byte_data = f.read()
+        entropy = -sum((byte_data.count(i) / len(byte_data)) * np.log2(byte_data.count(i) / len(byte_data)) for i in set(byte_data))
+        return entropy
+    except Exception as e:
+        logging.error(f"Error calculating entropy for {file_path}: {e}")
+        return None
+
+# Binwalk-Like File Carving (Detect embedded files in binary)
+def binwalk_analysis(file_path):
     try:
         with open(file_path, "rb") as f:
-            content = f.read()
-            # Search for base64 encoded data
-            base64_pattern = r'[A-Za-z0-9+/=]{4,}'
-            base64_matches = re.findall(base64_pattern, content.decode('latin1', errors='ignore'))
-            if base64_matches:
-                result += f"[*] Found base64 encoded data:\n"
-                result += "\n".join(base64_matches[:5])  # Show first 5 matches
-            else:
-                result += "[*] No base64 encoded data found.\n"
-
-            # Search for hexadecimal patterns (just an example)
-            hex_pattern = r'\b[0-9a-fA-F]{32}\b'  # Regex for MD5-like hashes
-            hex_matches = re.findall(hex_pattern, content.decode('latin1', errors='ignore'))
-            if hex_matches:
-                result += f"[*] Found hex patterns (possible hash or encoded data):\n"
-                result += "\n".join(hex_matches[:5])  # Show first 5 matches
-            else:
-                result += "[*] No hex patterns found.\n"
+            file_data = f.read()
+        signature = binascii.hexlify(file_data[:4]).decode('utf-8')
+        return signature
     except Exception as e:
-        result = f"[!] Error searching for encoded patterns: {e}\n"
-    return result
+        logging.error(f"Error performing binwalk-like analysis on {file_path}: {e}")
+        return None
+
+# Extract Text from ZIP Files
+def extract_text_from_zip(zip_path):
+    try:
+        with ZipFile(zip_path, 'r') as zip_file:
+            text = ""
+            for file in zip_file.namelist():
+                with zip_file.open(file) as f:
+                    text += f.read().decode('utf-8', errors='ignore')
+            return text
+    except Exception as e:
+        logging.error(f"Error extracting text from ZIP {zip_path}: {e}")
+        return None
+
+# Keyword Search Function
+def search_keyword_in_text(text, keyword):
+    if text and keyword.lower() in text.lower():
+        return f"Keyword '{keyword}' found!"
+    return f"Keyword '{keyword}' not found."
+
+# Base64 Encoding and Decoding with Padding Fix
+def decode_base64(encoded_str):
+    try:
+        # Ensure proper padding for base64 string
+        padded_str = encoded_str + '=' * (-len(encoded_str) % 4)
+        decoded_data = base64.b64decode(padded_str).decode('utf-8', errors='ignore')
+        return decoded_data
+    except Exception as e:
+        logging.error(f"Error decoding base64: {e}")
+        return None
+
+def encode_base64(data):
+    try:
+        encoded_data = base64.b64encode(data.encode('utf-8')).decode('utf-8')
+        return encoded_data
+    except Exception as e:
+        logging.error(f"Error encoding to base64: {e}")
+        return None
+
+# Extract Image Metadata
+def extract_image_metadata(image_path):
+    try:
+        with Image.open(image_path) as img:
+            metadata = img.info  # This could include EXIF data
+            return metadata
+    except Exception as e:
+        logging.error(f"Error extracting metadata from {image_path}: {e}")
+        return None
+
+# Extract Text from PDF files
+def extract_text_from_pdf(pdf_path):
+    try:
+        with pikepdf.open(pdf_path) as pdf:
+            text = ""
+            for page in pdf.pages:
+                text += page.extract_text()
+            return text
+    except Exception as e:
+        logging.error(f"Error extracting text from PDF {pdf_path}: {e}")
+        return None
+
+# Check for Steganography in Image
+def check_for_steganography(image_path):
+    try:
+        with Image.open(image_path) as img:
+            img_data = img.getdata()
+            # Basic analysis (you can improve this by looking for LSB encoding or specific patterns)
+            if any(px[3] < 255 for px in img_data):  # Check for transparent/odd pixels
+                return "Potential steganography detected."
+            return "No steganography detected."
+    except Exception as e:
+        logging.error(f"Error checking for steganography in {image_path}: {e}")
+        return None
+
+def extract_and_save_palette(image_path):
+    try:
+        with Image.open(image_path) as img:
+            # Check if the image has a palette (P mode)
+            if img.mode == 'P':
+                palette = img.getpalette()  # Extract the palette
+                palette_filename = f"{os.path.splitext(image_path)[0]}_palette.txt"
+
+                # Save the palette to a text file (RGB triplets)
+                with open(palette_filename, 'w') as f:
+                    for i in range(0, len(palette), 3):
+                        f.write(f"RGB({palette[i]}, {palette[i+1]}, {palette[i+2]})\n")
+                
+                # Optionally, generate an image showing the palette
+                palette_image = Image.new("RGB", (256, 1))  # Generate a simple 1-row image for the palette
+                palette_image.putpalette(palette)
+                palette_image.save(f"{os.path.splitext(image_path)[0]}_palette.png")
+                
+                return f"Palette extracted and saved as {palette_filename} and palette image generated as {os.path.splitext(image_path)[0]}_palette.png"
+            
+            elif img.mode in ['RGB', 'RGBA']:
+                # If the image is not in 'P' mode, we can convert it to 'P' mode to extract a palette
+                img = img.convert('P')
+                palette = img.getpalette()
+                palette_filename = f"{os.path.splitext(image_path)[0]}_palette.txt"
+
+                # Save the palette to a text file (RGB triplets)
+                with open(palette_filename, 'w') as f:
+                    for i in range(0, len(palette), 3):
+                        f.write(f"RGB({palette[i]}, {palette[i+1]}, {palette[i+2]})\n")
+                
+                # Optionally, generate an image showing the palette
+                palette_image = Image.new("RGB", (256, 1))  # Generate a simple 1-row image for the palette
+                palette_image.putpalette(palette)
+                palette_image.save(f"{os.path.splitext(image_path)[0]}_palette.png")
+                
+                return f"Palette extracted (converted to P mode) and saved as {palette_filename} and palette image generated as {os.path.splitext(image_path)[0]}_palette.png"
+
+            else:
+                return "Image mode does not support palette extraction."
+
+    except Exception as e:
+        logging.error(f"Error extracting palette from {image_path}: {e}")
+        return None
 
 
-# Main function to run all checks
-def run_analysis(file_path, keyword):
-    if not os.path.exists(file_path):
-        return "[!] The specified file does not exist.\n"
-
-    result = ""
-    result += extract_strings(file_path)
-    result += check_file_signature(file_path)
-    result += binwalk_like_analysis(file_path)
-    result += hash_file(file_path, 'sha256')
-    result += analyze_entropy(file_path)
-    result += search_encoded_patterns(file_path)
-
-    # File type-specific analysis
-    if file_path.lower().endswith(('png', 'jpg', 'jpeg', 'bmp', 'gif')):
-        result += extract_lsb(file_path, keyword)
-        result += extract_metadata(file_path, keyword)
-    elif file_path.lower().endswith('.pdf'):
-        result += extract_pdf_text(file_path, keyword)
-    elif file_path.lower().endswith('.docx'):
-        result += extract_word_text(file_path, keyword)
-    elif file_path.lower().endswith('.zip'):
-        result += extract_zip_text(file_path, keyword)
-    elif file_path.lower().endswith(('mp3', 'wav')):
-        result += analyze_audio(file_path)
-    else:
-        result += "[*] Unsupported file type for steganography or text extraction.\n"
-
-    return result
-
-
-# GUI Functionality
-def browse_file():
-    filename = filedialog.askopenfilename(filetypes=[("All Files", "*.*"),
-                                                    ("Image Files", "*.png;*.jpg;*.jpeg;*.bmp;*.gif"),
-                                                    ("PDF Files", "*.pdf"),
-                                                    ("Word Documents", "*.docx"),
-                                                    ("Text Files", "*.txt"),
-                                                    ("ZIP Files", "*.zip")])
+# Main Analysis Function
+def analyze_file(file_path, methods, keyword=None):
+    results = {}
     
-    if filename:
-        file_path_entry.delete(0, tk.END)
-        file_path_entry.insert(0, filename)
+    # Perform Hashing
+    if 'hash' in methods:
+        results['md5'] = calculate_hash(file_path, 'md5')
+        results['sha256'] = calculate_hash(file_path, 'sha256')
 
+    # Perform Strings Extraction
+    if 'strings' in methods:
+        results['strings'] = extract_strings(file_path)
 
-def start_analysis():
-    file_path = file_path_entry.get()
-    keyword = keyword_entry.get()
+    # Perform Hex Dump
+    if 'hexdump' in methods:
+        results['hex_dump'] = hex_dump(file_path)
 
-    if not file_path or not keyword:
-        messagebox.showerror("Error", "Please provide both a file and a keyword.")
+    # Perform Entropy Analysis
+    if 'entropy' in methods:
+        results['entropy'] = calculate_entropy(file_path)
+
+    # Perform Binwalk-like Analysis
+    if 'binwalk' in methods:
+        results['binwalk'] = binwalk_analysis(file_path)
+
+    # Perform ZIP Extraction and Text Search
+    if 'extract_zip_text' in methods and detect_file_type(file_path) == 'application/zip':
+        zip_text = extract_text_from_zip(file_path)
+        results['zip_text'] = zip_text
+        if keyword:
+            results['zip_keyword_search'] = search_keyword_in_text(zip_text, keyword)
+
+    # Additional methods for base64, PDF text extraction, metadata, and steganography
+    if 'base64' in methods:
+        base64_data = decode_base64(file_path)
+        if base64_data:
+            results['base64_decoded'] = base64_data
+
+    if 'metadata' in methods:
+        image_metadata = extract_image_metadata(file_path)
+        if image_metadata:
+            results['image_metadata'] = image_metadata
+
+    if 'pdf_text' in methods:
+        pdf_text = extract_text_from_pdf(file_path)
+        if pdf_text:
+            results['pdf_text'] = pdf_text
+
+    if 'steganography' in methods:
+        stego_check = check_for_steganography(file_path)
+        results['steganography'] = stego_check
+
+    # Check if the 'extract_palette' method is selected
+    if 'extract_palette' in methods:
+        palette_result = extract_and_save_palette(file_path)
+        if palette_result:
+            results['palette'] = palette_result
+
+    # Filter results if keyword is provided
+    if keyword:
+        filtered_results = {}
+        for key, value in results.items():
+            if isinstance(value, str) and keyword.lower() in value.lower():
+                filtered_results[key] = value
+            elif isinstance(value, list) and any(keyword.lower() in item.lower() for item in value):
+                filtered_results[key] = [item for item in value if keyword.lower() in item.lower()]
+        return filtered_results
+
+    return results
+
+# Function to run analysis and update GUI with results
+def run_analysis():
+    # Get the file path from the entry widget
+    file_path = file_entry.get()
+
+    # Check if file is selected
+    if not file_path or not os.path.isfile(file_path):
+        messagebox.showerror("Error", "Please select a valid file.")
         return
+    
+    # Get selected methods
+    selected_methods = []
+    if hash_var.get():
+        selected_methods.append('hash')
+    if binwalk_var.get():
+        selected_methods.append('binwalk')
+    if extract_zip_var.get():
+        selected_methods.append('extract_zip_text')
+    if strings_var.get():
+        selected_methods.append('strings')
+    if hexdump_var.get():
+        selected_methods.append('hexdump')
+    if entropy_var.get():
+        selected_methods.append('entropy')
+    if base64_var.get():
+        selected_methods.append('base64')
+    if metadata_var.get():
+        selected_methods.append('metadata')
+    if pdf_text_var.get():
+        selected_methods.append('pdf_text')
+    if steganography_var.get():
+        selected_methods.append('steganography')
+    if palette_var.get():
+        selected_methods.append('extract_palette')
 
-    result = run_analysis(file_path, keyword)
-
-    # Display results in the text box
+    # Perform analysis
+    results = analyze_file(file_path, selected_methods, keyword_entry.get())
+    
+    # Clear the result text widget
     result_text.delete(1.0, tk.END)
-    result_text.insert(tk.END, result)
 
+    # Display results
+    if results:
+        result_text.insert(tk.END, str(results))
+    else:
+        result_text.insert(tk.END, "No results found.")
 
-# Set up the main window
-root = tk.Tk()
-root.title("File Analysis Tool")
-root.geometry("600x500")
+# Function to select a file
+def select_file():
+    file_path = filedialog.askopenfilename(filetypes=[("All Files", "*.*")])
+    file_entry.delete(0, tk.END)  # Clear previous text
+    file_entry.insert(0, file_path)  # Insert selected file path
 
-# Create GUI components
-file_path_label = tk.Label(root, text="Select File:")
-file_path_label.pack(pady=10)
+# Create GUI window
+window = tk.Tk()
+window.title("CTF Analysis Tool")
 
-file_path_entry = tk.Entry(root, width=50)
-file_path_entry.pack(pady=5)
+# Frame for file selection
+frame1 = tk.Frame(window)
+frame1.pack(pady=10)
 
-browse_button = tk.Button(root, text="Browse", command=browse_file)
-browse_button.pack(pady=5)
+file_label = tk.Label(frame1, text="Select File:")
+file_label.pack(side=tk.LEFT, padx=5)
 
-keyword_label = tk.Label(root, text="Keyword to Search For:")
-keyword_label.pack(pady=10)
+file_entry = tk.Entry(frame1, width=50)
+file_entry.pack(side=tk.LEFT, padx=5)
 
-keyword_entry = tk.Entry(root, width=50)
-keyword_entry.pack(pady=5)
+select_button = tk.Button(frame1, text="Browse", command=select_file)
+select_button.pack(side=tk.LEFT)
 
-start_button = tk.Button(root, text="Start Analysis", command=start_analysis)
-start_button.pack(pady=20)
+# Frame for analysis methods selection
+frame2 = tk.Frame(window)
+frame2.pack(pady=10)
 
-result_text = tk.Text(root, width=70, height=15)
-result_text.pack(pady=10)
+hash_var = tk.IntVar()
+binwalk_var = tk.IntVar()
+extract_zip_var = tk.IntVar()
+strings_var = tk.IntVar()
+hexdump_var = tk.IntVar()
+entropy_var = tk.IntVar()
+base64_var = tk.IntVar()
+metadata_var = tk.IntVar()
+pdf_text_var = tk.IntVar()
+steganography_var = tk.IntVar()
+palette_var = tk.IntVar()  # Variable for palette extraction
 
-# Start the GUI loop
-root.mainloop()
+hash_check = tk.Checkbutton(frame2, text="Hash", variable=hash_var)
+hash_check.pack(side=tk.LEFT)
+
+binwalk_check = tk.Checkbutton(frame2, text="Binwalk", variable=binwalk_var)
+binwalk_check.pack(side=tk.LEFT)
+
+extract_zip_check = tk.Checkbutton(frame2, text="Extract ZIP Text", variable=extract_zip_var)
+extract_zip_check.pack(side=tk.LEFT)
+
+strings_check = tk.Checkbutton(frame2, text="Strings", variable=strings_var)
+strings_check.pack(side=tk.LEFT)
+
+hexdump_check = tk.Checkbutton(frame2, text="Hex Dump", variable=hexdump_var)
+hexdump_check.pack(side=tk.LEFT)
+
+entropy_check = tk.Checkbutton(frame2, text="Entropy", variable=entropy_var)
+entropy_check.pack(side=tk.LEFT)
+
+base64_check = tk.Checkbutton(frame2, text="Base64 Decode/Encode", variable=base64_var)
+base64_check.pack(side=tk.LEFT)
+
+metadata_check = tk.Checkbutton(frame2, text="Image Metadata", variable=metadata_var)
+metadata_check.pack(side=tk.LEFT)
+
+pdf_text_check = tk.Checkbutton(frame2, text="PDF Text", variable=pdf_text_var)
+pdf_text_check.pack(side=tk.LEFT)
+
+steganography_check = tk.Checkbutton(frame2, text="Steganography", variable=steganography_var)
+steganography_check.pack(side=tk.LEFT)
+
+palette_check = tk.Checkbutton(frame2, text="Extract Image Palette", variable=palette_var)
+palette_check.pack(side=tk.LEFT)
+
+# Frame for keyword search
+frame3 = tk.Frame(window)
+frame3.pack(pady=10)
+
+keyword_label = tk.Label(frame3, text="Search Keyword:")
+keyword_label.pack(side=tk.LEFT)
+
+keyword_entry = tk.Entry(frame3, width=50)
+keyword_entry.pack(side=tk.LEFT, padx=5)
+
+# Frame for results display
+frame4 = tk.Frame(window)
+frame4.pack(pady=10)
+
+result_text = scrolledtext.ScrolledText(frame4, width=80, height=20)
+result_text.pack()
+
+# Run analysis button
+analyze_button = tk.Button(window, text="Run Analysis", command=run_analysis)
+analyze_button.pack(pady=10)
+
+window.mainloop()
