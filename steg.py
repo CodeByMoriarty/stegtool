@@ -106,7 +106,6 @@ def decode_base64(encoded_str):
     except Exception as e:
         logging.error(f"Error decoding base64: {e}")
         return None
-
 def encode_base64(data):
     try:
         encoded_data = base64.b64encode(data.encode('utf-8')).decode('utf-8')
@@ -142,14 +141,18 @@ def check_for_steganography(image_path):
     try:
         with Image.open(image_path) as img:
             img_data = img.getdata()
-            # Basic analysis (you can improve this by looking for LSB encoding or specific patterns)
-            if any(px[3] < 255 for px in img_data):  # Check for transparent/odd pixels
-                return "Potential steganography detected."
+            if img.mode in ['RGBA', 'RGB']:
+                # Checking for transparency in RGBA or odd pixels in RGB
+                if any(px[3] < 255 if img.mode == 'RGBA' else px[0] < 255 for px in img_data):  # Check alpha channel for RGBA
+                    return "Potential steganography detected."
+            else:
+                # For other image modes, you may want to analyze based on pixel values directly
+                if any(px < 255 for px in img_data):  # Checking for unusual values in grayscale or other modes
+                    return "Potential steganography detected."
             return "No steganography detected."
     except Exception as e:
         logging.error(f"Error checking for steganography in {image_path}: {e}")
         return None
-
 def extract_and_save_palette(image_path):
     try:
         with Image.open(image_path) as img:
